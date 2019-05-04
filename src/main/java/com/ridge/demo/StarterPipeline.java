@@ -49,8 +49,28 @@ import org.apache.beam.sdk.io.gcp.pubsub.PubsubIO;
  *   --stagingLocation=<STAGING_LOCATION_IN_CLOUD_STORAGE>
  *   --runner=DataflowRunner
  */
+
 public class StarterPipeline {
   private static final Logger LOG = LoggerFactory.getLogger(StarterPipeline.class);
+
+  static class FilterEvents extends DoFn<String, String> {
+
+    @ProcessElement
+    public void processElement(ProcessContext c) {
+      JSONParser jsonParser = new JSONParser();
+      JSONObject jsonMessage = null;
+  
+      try {
+        // Parse the context as a JSON object:
+        jsonMessage = (JSONObject) jsonParser.parse(c.element());
+        if(((String)jsonMessage.get("type")).equals("event")) {
+          c.output((String)jsonMessage.get("meta"));
+        }
+      } catch (Exception e) {
+        LOG.warn(String.format("Exception encountered parsing JSON (%s) ...", e));
+      }
+    } 
+  }
 
   public static void main(String[] args) {
     Pipeline p = Pipeline.create(
@@ -59,27 +79,10 @@ public class StarterPipeline {
     p.apply("read from PubSub",
       PubsubIO.readStrings().fromSubscription("projects/gfs-ecm/subscriptions/df-wibble-test-sub")
     )
-    .apply("JSON Parse message and Log events",
+    .apply("Filter events",
     ParDo.of(
-      new DoFn<String, Void>() {
-        @ProcessElement
-        public void ParseAndFilterElement(ProcessContext c) {
-          JSONParser jsonParser = new JSONParser();
-          JSONObject jsonMessage = null;
-
-          try {
-            // Parse the context as a JSON object:
-            jsonMessage = (JSONObject) jsonParser.parse(c.element());
-            if(((String)jsonMessage.get("type")).equals("event")) {
-              LOG.info("Found an event!");
-            }
-          } catch (Exception e) {
-            LOG.warn(String.format("Exceptuin encountered parsing JSON (%s) ...", e));
-          }
-        }
-      }
-    ));
-/*
+      new FilterEvents()
+    ))
     .apply("Log out messages",
     ParDo.of(
       new DoFn<String, Void>() {
@@ -88,7 +91,7 @@ public class StarterPipeline {
           LOG.info(c.element());
       }
     }));
-*/
+    
     p.run();
   }
 }
