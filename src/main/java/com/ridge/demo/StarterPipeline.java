@@ -32,6 +32,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubIO;
+import org.apache.beam.sdk.values.PCollectionTuple;
+import org.apache.beam.sdk.values.TupleTag;
+import org.apache.beam.sdk.values.TupleTagList;
 
 /**
  * A starter example for writing Beam programs.
@@ -53,18 +56,23 @@ import org.apache.beam.sdk.io.gcp.pubsub.PubsubIO;
 public class StarterPipeline {
   private static final Logger LOG = LoggerFactory.getLogger(StarterPipeline.class);
 
+  private static final TupleTag<String> events = new TupleTag<String>(){};
+  private static final TupleTag<String> nonEvents = new TupleTag<String>(){};
+
   static class FilterEvents extends DoFn<String, String> {
 
     @ProcessElement
-    public void processElement(ProcessContext c) {
+    public void processElement(@Element String obj, MultiOutputReceiver out) {
       JSONParser jsonParser = new JSONParser();
       JSONObject jsonMessage = null;
-  
+
       try {
         // Parse the context as a JSON object:
-        jsonMessage = (JSONObject) jsonParser.parse(c.element());
+        jsonMessage = (JSONObject) jsonParser.parse(obj);
         if(((String)jsonMessage.get("type")).equals("event")) {
-          c.output((String)jsonMessage.get("meta"));
+          out.get(events).output((String)jsonMessage.get("meta"));
+        } else {
+          out.get(nonEvents).output("not an event");
         }
       } catch (Exception e) {
         LOG.warn(String.format("Exception encountered parsing JSON (%s) ...", e));
@@ -76,22 +84,40 @@ public class StarterPipeline {
     Pipeline p = Pipeline.create(
         PipelineOptionsFactory.fromArgs(args).withValidation().create());
 
-    p.apply("read from PubSub",
+    PCollectionTuple t = p.apply("read from PubSub",
       PubsubIO.readStrings().fromSubscription("projects/gfs-ecm/subscriptions/df-wibble-test-sub")
     )
     .apply("Filter events",
-    ParDo.of(
-      new FilterEvents()
-    ))
-    .apply("Log out messages",
-    ParDo.of(
-      new DoFn<String, Void>() {
-        @ProcessElement
-        public void processElement(ProcessContext c)  {
-          LOG.info(c.element());
-      }
-    }));
+      ParDo.of(
+        new FilterEvents()
+      )
+      .withOutputTags(events, TupleTagList.of(nonEvents))
+    );
+
+    t.get(events)
+    .apply("Log out events",
+      ParDo.of(
+        new DoFn<String, Void>() {
+          @ProcessElement
+          public void processElement(ProcessContext c)  {
+            LOG.info(c.element());
+          }
+        }
+      )
+    );
     
+    t.get(nonEvents)
+    .apply("Log non events",
+      ParDo.of(
+        new DoFn<String, Void>() {
+          @ProcessElement
+          public void processElement(ProcessContext c)  {
+            LOG.info("Non-event found");
+          }
+        }
+      )
+    );
+
     p.run();
   }
 }
